@@ -179,17 +179,24 @@ input,textarea,select { font-family:inherit; font-size:1rem; }
 }
 .upload-placeholder {
   display:flex; flex-direction:column; align-items:center;
-  justify-content:center; gap:6px; padding:28px 20px; text-align:center;
+  justify-content:center; gap:4px; padding:32px 20px; text-align:center;
+  cursor:pointer;
 }
-.upload-icon { color:var(--text-muted); margin-bottom:4px; }
-.upload-text { font-size:0.9375rem; color:var(--text-secondary); font-weight:500; }
-.upload-sub { font-size:0.875rem; color:var(--text-muted); }
-.upload-hint { font-size:0.75rem; color:var(--text-muted); margin-top:2px; }
+.upload-icon { color:var(--text-muted); margin-bottom:6px; display:flex; }
+.upload-text { font-size:0.9375rem; color:var(--text-secondary); font-weight:500; line-height:1.4; }
+.upload-sub {
+  font-size:0.875rem; color:var(--text-muted); line-height:1.4;
+  display:flex; align-items:center; justify-content:center; gap:4px; flex-wrap:wrap;
+}
+.upload-hint { font-size:0.75rem; color:var(--text-muted); margin-top:6px; line-height:1.4; }
 .upload-link {
   color:var(--accent-bright); font-weight:600; cursor:pointer;
-  text-decoration:underline; background:none; border:none; font-size:inherit;
+  text-decoration:underline; background:none; border:none;
+  font-size:inherit; font-family:inherit; line-height:inherit;
+  padding:0; vertical-align:baseline;
 }
 .upload-link:hover { color:var(--accent); }
+.upload-link:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:2px; }
 
 .upload-preview {
   display:flex; align-items:center; gap:14px; padding:14px 16px;
@@ -366,11 +373,31 @@ details[open] .advanced-toggle svg { transform:rotate(180deg); }
   transition:opacity 0.3s ease;
 }
 
+/* Лоадер, показывается пока картинка реально не отрисовалась браузером */
+.image-item-loader {
+  position:absolute; inset:0; z-index:2;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--bg-secondary);
+  min-height:300px;
+}
+.image-item-spinner {
+  width:36px; height:36px;
+  border:3px solid var(--border);
+  border-top-color:var(--accent);
+  border-radius:50%;
+  animation:spin 0.85s linear infinite;
+}
+.image-item-error {
+  font-size:0.8125rem; color:var(--text-muted); padding:0 16px; text-align:center;
+}
+
 /* для 2 и 4 изображений — фиксируем aspect-ratio чтобы не скакала сетка */
 .images-grid.count-2 .image-item,
 .images-grid.count-4 .image-item { aspect-ratio:1/1; }
 .images-grid.count-2 .image-item img,
 .images-grid.count-4 .image-item img { height:100%; min-height:unset; }
+.images-grid.count-2 .image-item-loader,
+.images-grid.count-4 .image-item-loader { min-height:unset; }
 
 /* ratio-классы для одиночного изображения */
 .image-item.ratio-16-9 { aspect-ratio:16/9; }

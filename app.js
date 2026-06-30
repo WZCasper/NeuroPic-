@@ -259,7 +259,13 @@ function bindEvents() {
   });
 
   // ── ЗАГРУЗКА ИЗОБРАЖЕНИЙ (пункт 1) ────────────────────────────
-  dom.btnPickFile.addEventListener('click', () => dom.imageUpload.click());
+  // Единый обработчик клика для кнопки выбора файла.
+  // stopPropagation останавливает всплытие до uploadZone, чтобы клик не срабатывал дважды.
+  dom.btnPickFile.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    dom.imageUpload.click();
+  });
 
   dom.imageUpload.addEventListener('change', e => {
     const file = e.target.files[0];
@@ -267,7 +273,10 @@ function bindEvents() {
     e.target.value = '';
   });
 
-  dom.btnRemoveImage.addEventListener('click', removeUploadedImage);
+  dom.btnRemoveImage.addEventListener('click', e => {
+    e.stopPropagation();
+    removeUploadedImage();
+  });
 
   // Drag & Drop
   dom.uploadZone.addEventListener('dragover', e => {
@@ -290,15 +299,9 @@ function bindEvents() {
     }
   });
 
-  // Клик по зоне загрузки (если нет превью)
-  dom.uploadZone.addEventListener('click', e => {
-    if (
-      state.uploadedImage === null &&
-      !e.target.closest('.upload-remove-btn') &&
-      !e.target.closest('.upload-link')
-    ) {
-      dom.imageUpload.click();
-    }
+  // Клик по всей зоне (плейсхолдер, не на самой кнопке — та уже обработана выше и остановлена)
+  dom.uploadPlaceholder.addEventListener('click', () => {
+    if (state.uploadedImage === null) dom.imageUpload.click();
   });
 }
 
@@ -445,7 +448,9 @@ async function generateViaNanoBanana(prompt, negative, nbModel, seed) {
 
   const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(finalPrompt)}?${params}`;
 
-  await loadImageFromUrl(url);
+  // URL подставляется напрямую в <img> — без предварительной проверки через new Image(),
+  // так как кросс-доменное событие onload не всегда срабатывает корректно (CORS),
+  // что приводило к зависанию на таймауте. Браузер сам отрисует изображение, когда оно будет готово.
 
   return {
     url,
@@ -478,7 +483,8 @@ async function generateViaPollinations(prompt, negative, modelId, seed) {
   if (negative) params.set('negative_prompt', negative);
 
   const url = `https://image.pollinations.ai/prompt/${encoded}?${params}`;
-  await loadImageFromUrl(url);
+
+  // Аналогично NanoBanana — без блокирующей проверки через Image(), URL уходит напрямую в <img>.
 
   return {
     url,
@@ -579,7 +585,10 @@ function renderImageResults(images, prompt) {
     item.className = `image-item ${ratioClass}`;
 
     item.innerHTML = `
-      <img src="${img.url}" alt="${escapeHtml(prompt)}" loading="eager" />
+      <div class="image-item-loader" data-loader="${idx}">
+        <div class="image-item-spinner"></div>
+      </div>
+      <img src="${img.url}" alt="${escapeHtml(prompt)}" loading="eager" data-img="${idx}" />
       <span class="image-model-badge">${escapeHtml(img.provider)}</span>
       <div class="image-overlay">
         <button class="image-action-btn" data-action="lightbox" data-idx="${idx}">
@@ -592,6 +601,16 @@ function renderImageResults(images, prompt) {
         </button>
       </div>
     `;
+
+    // Скрываем лоадер когда картинка реально отрисовалась в браузере
+    const imgEl    = item.querySelector(`[data-img="${idx}"]`);
+    const loaderEl = item.querySelector(`[data-loader="${idx}"]`);
+    imgEl.addEventListener('load', () => { loaderEl.style.display = 'none'; });
+    imgEl.addEventListener('error', () => {
+      loaderEl.innerHTML = '<span class="image-item-error">Не удалось загрузить</span>';
+    });
+    // Если картинка уже в кэше браузера, событие load может не сработать заново — проверяем complete
+    if (imgEl.complete && imgEl.naturalWidth > 0) loaderEl.style.display = 'none';
 
     item.addEventListener('click', e => {
       const btn = e.target.closest('[data-action]');
@@ -925,16 +944,6 @@ function showToast(message, type = 'success') {
 // ════════════════════════════════════════════════════════════════════
 //  ВСПОМОГАТЕЛЬНЫЕ
 // ════════════════════════════════════════════════════════════════════
-function loadImageFromUrl(url) {
-  return new Promise((resolve, reject) => {
-    const img   = new Image();
-    const timer = setTimeout(() => reject(new Error('Timeout')), 90000);
-    img.onload  = () => { clearTimeout(timer); resolve(url); };
-    img.onerror = () => { clearTimeout(timer); reject(new Error('Load error')); };
-    img.src     = url;
-  });
-}
-
 function base64ToBlob(base64, type) {
   const bin  = atob(base64);
   const arr  = new Uint8Array(bin.length);
