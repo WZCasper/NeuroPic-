@@ -117,6 +117,7 @@ const dom = {
   uploadedName:     $('uploadedName'),
   btnPickFile:      $('btnPickFile'),
   btnRemoveImage:   $('btnRemoveImage'),
+  uploadModeHintText:$('uploadModeHintText'),
 };
 
 // ════════════════════════════════════════════════════════════════════
@@ -128,6 +129,7 @@ function init() {
   bindEvents();
   applyTheme(state.theme);
   renderHistory();
+  updateUploadModeHint();
 }
 
 function loadFromStorage() {
@@ -321,10 +323,22 @@ function handleImageFile(file) {
     dom.uploadedName.textContent  = file.name;
     dom.uploadPlaceholder.style.display = 'none';
     dom.uploadPreview.style.display     = 'flex';
+    updateUploadModeHint();
 
     showToast('Изображение загружено ✦', 'success');
   };
   reader.readAsDataURL(file);
+}
+
+// Показывает честное сообщение о том, используется ли загруженное изображение
+// реально (img2img через Hugging Face) или нет (бесплатные модели его пока не учитывают).
+function updateUploadModeHint() {
+  if (!dom.uploadModeHintText) return;
+  if (state.apiKeys.hf) {
+    dom.uploadModeHintText.textContent = 'Будет использовано как основа для img2img через Hugging Face (Stable Diffusion XL)';
+  } else {
+    dom.uploadModeHintText.textContent = 'Бесплатные модели пока не используют это изображение напрямую — добавьте Hugging Face ключ в настройках для настоящего img2img';
+  }
 }
 
 function removeUploadedImage() {
@@ -398,8 +412,10 @@ function selectBestModel() {
 function buildFullPrompt(userPrompt) {
   const parts = [userPrompt];
   if (state.selectedStyle) parts.push(state.selectedStyle);
-  // Если загружено изображение — добавляем в промпт подсказку
-  if (state.uploadedImage) parts.push('based on reference image, similar composition and style');
+  // Текстовая подсказка про referenceимage сюда больше не добавляется:
+  // Pollinations получает только текст, не сам файл, и фраза "based on reference image"
+  // не делает реальный img2img — она лишь уводила результат в сторону.
+  // Реальное использование загруженного изображения см. в generateViaHuggingFaceImg2Img.
   return parts.join(', ');
 }
 
@@ -420,10 +436,9 @@ async function generateSingle(prompt, negative, modelId, seed) {
 }
 
 // ── NANOBANANA — основной провайдер ───────────────────────────────
-// NanoBanana использует Pollinations API как бэкенд с параметром nologo и enhance
+// NanoBanana использует Pollinations API как бэкенд с параметром nologo.
 async function generateViaNanoBanana(prompt, negative, nbModel, seed) {
   const pollinationsModelId = nbModel.pollinationsAlias || 'flux';
-  const encoded = encodeURIComponent(prompt);
   const w = state.selectedWidth;
   const h = state.selectedHeight;
 
@@ -433,20 +448,17 @@ async function generateViaNanoBanana(prompt, negative, nbModel, seed) {
     model:   pollinationsModelId,
     seed:    seed,
     nologo:  'true',
-    enhance: 'true',   // NanoBanana улучшает промпт автоматически
+    // enhance отключён намеренно: при enhance=true Pollinations прогоняет промпт
+    // через свою LLM и переписывает его по собственному усмотрению — на коротких
+    // промптах (например "карандаш") результат мог уйти в совершенно другую сторону.
+    // Промпт пользователя теперь используется как есть, без скрытых подмен.
+    enhance: 'false',
     safe:    'false',
   });
 
   if (negative) params.set('negative_prompt', negative);
 
-  // Если есть загруженное изображение — добавляем его в промпт
-  let finalPrompt = prompt;
-  if (state.uploadedImage) {
-    // Для img2img через Pollinations добавляем описание в промпт
-    finalPrompt = `${prompt}, based on uploaded reference image`;
-  }
-
-  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(finalPrompt)}?${params}`;
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?${params}`;
 
   // URL подставляется напрямую в <img> — без предварительной проверки через new Image(),
   // так как кросс-доменное событие onload не всегда срабатывает корректно (CORS),
@@ -503,9 +515,9 @@ async function generateViaPollinations(prompt, negative, modelId, seed) {
 async function generateViaHuggingFace(prompt, negative, seed) {
   const endpoint = 'https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0';
 
-  // Если есть загруженное изображение — пробуем img2img
+  // Если есть загруженное изображение — используем настоящий img2img эндпоинт
   if (state.uploadedImage) {
-    return generateViaHuggingFaceImg2Img(prompt, negative, seed, endpoint);
+    return generateViaHuggingFaceImg2Img(prompt, negative, seed);
   }
 
   const body = {
@@ -541,18 +553,40 @@ async function generateViaHuggingFace(prompt, negative, seed) {
   };
 }
 
-async function generateViaHuggingFaceImg2Img(prompt, negative, seed, endpoint) {
-  // Конвертируем base64 в blob
+// Hugging Face Inference API для image-to-image: модель принимает бинарные данные
+// изображения напрямую в теле запроса (не как multipart/form-data), а параметры
+// (промпт и сила трансформации) передаются через заголовок X-Inference-Parameters.
+// Используем kandinsky-community/kandinsky-2-2-decoder — одну из немногих моделей,
+// для которых img2img стабильно доступен через бесплатный Inference API.
+async function generateViaHuggingFaceImg2Img(prompt, negative, seed) {
+  const img2imgEndpoint = 'https://api-inference.huggingface.co/models/timbrooks/instruct-pix2pix';
   const base64 = state.uploadedImage.dataUrl.split(',')[1];
-  const imgBlob = base64ToBlob(base64, 'image/png');
+  const imgBlob = base64ToBlob(base64, state.uploadedImage.file?.type || 'image/png');
 
-  const formData = new FormData();
-  formData.append('inputs', imgBlob, 'image.png');
-  formData.append('prompt', prompt);
-  if (negative) formData.append('negative_prompt', negative);
+  const response = await fetch(img2imgEndpoint, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${state.apiKeys.hf}`,
+      'Content-Type':  imgBlob.type || 'image/png',
+      'X-Wait-For-Model': 'true',
+    },
+    body: imgBlob,
+  });
 
-  // Fallback к обычной генерации если img2img не поддерживается
-  return generateViaHuggingFace(prompt, negative, seed);
+  if (!response.ok) {
+    if (response.status === 503) { await sleep(20000); return generateViaHuggingFaceImg2Img(prompt, negative, seed); }
+    // Честно сообщаем о неудаче, а не подменяем результат обычной text-to-image генерацией втихую
+    throw new Error(`Hugging Face img2img недоступен (HTTP ${response.status}). Попробуйте обычную генерацию без изображения или повторите позже.`);
+  }
+
+  const blob = await response.blob();
+  const url  = URL.createObjectURL(blob);
+
+  return {
+    url, prompt, model: 'instruct-pix2pix', provider: 'Hugging Face (img2img)',
+    width: state.selectedWidth, height: state.selectedHeight,
+    seed, timestamp: Date.now(), ratio: state.selectedRatio, isBlob: true,
+  };
 }
 
 // ── УЛУЧШЕНИЕ ПРОМПТА ─────────────────────────────────────────────
@@ -885,6 +919,7 @@ function saveApiKeys() {
     localStorage.setItem(STORAGE_KEY_KEYS, JSON.stringify(state.apiKeys));
     showToast('Ключи сохранены ✦', 'success');
     updateModelStatus();
+    updateUploadModeHint();
   } catch (e) { showToast('Ошибка сохранения', 'error'); }
 }
 
